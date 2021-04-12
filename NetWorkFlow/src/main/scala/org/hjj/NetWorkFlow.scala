@@ -1,5 +1,6 @@
 package org.hjj
 
+import java.sql.Timestamp
 import java.text.SimpleDateFormat
 
 import org.apache.flink.api.common.functions.AggregateFunction
@@ -13,6 +14,8 @@ import org.apache.flink.streaming.api.functions.KeyedProcessFunction
 import org.apache.flink.streaming.api.scala.function.WindowFunction
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow
 import org.apache.flink.util.Collector
+
+import scala.collection.mutable.ListBuffer
 
 // 数据日志样例类
 case class ApacheLogEvent(ip: String, userId: String, eventTime: Long, method: String, url: String)
@@ -28,8 +31,8 @@ object NetWorkFlow {
     env.setParallelism(1)
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
 
-    // 从linux网络监听中读取数据
-    val dataStream = env.socketTextStream("localhost",8888)
+    // v1: 从本地文件中读取
+    val dataStream = env.readTextFile("D:\\Code\\javaCode\\UserBehaviorBaseFlink\\NetWorkFlow\\src\\main\\resources\\apache.log")
       .map(data =>{
         val dataArray = data.split(" ")
         val simpleDateFormat = new SimpleDateFormat("dd/MM/yyyy:HH:mm:ss") // 定义时间格式
@@ -42,7 +45,14 @@ object NetWorkFlow {
       .keyBy(_.url)
       .timeWindow(Time.minutes(10),Time.seconds(5))
       .allowedLateness(Time.seconds(60))  // 允许迟到的时间为60秒
+      .aggregate(new CountAgg(),new WindowResult())
 
+    val processStream = dataStream.keyBy(_.windowEnd).process(new TopNHotUrls(5))
+
+    dataStream.print("agg")
+    processStream.print("process")
+
+    env.execute("network flow")
 
   }
 }
@@ -73,5 +83,28 @@ class TopNHotUrls(topSize: Int) extends KeyedProcessFunction[Long,UrlViewCount,S
   override def processElement(value: UrlViewCount, ctx: KeyedProcessFunction[Long, UrlViewCount, String]#Context, out: Collector[String]): Unit = {
     urlState.put(value.url,value.count)
     ctx.timerService().registerEventTimeTimer(value.windowEnd+1)
+  }
+
+  override def onTimer(timestamp: Long, ctx: KeyedProcessFunction[Long, UrlViewCount, String]#OnTimerContext, out: Collector[String]): Unit = {
+    val allUrlViews: ListBuffer[(String, Long)] = new ListBuffer[(String, Long)]
+    val iter = urlState.entries().iterator()
+    while (iter.hasNext){
+      val entry = iter.next()
+      allUrlViews += ((entry.getKey,entry.getValue))
+    }
+    val sortedUrlViews = allUrlViews.sortWith(_._2 > _._2).take(topSize) // 进行排序
+
+    // 格式化输出
+    val result = new StringBuilder()
+    result.append("Time: ").append(new Timestamp(timestamp-1)).append("\n")
+    for (i <- sortedUrlViews.indices){
+      val currentUrlViews = sortedUrlViews(i)
+      result.append("No").append(i+1).append(":")
+        .append("URL: ").append(currentUrlViews._1)
+        .append(" 访问量: ").append(currentUrlViews._2).append("\n")
+    }
+    result.append("----------------------")
+    Thread.sleep(1000)
+    out.collect(result.toString())
   }
 }
