@@ -65,7 +65,6 @@ class WindowResult() extends WindowFunction[Long,UrlViewCount,String,TimeWindow]
     out.collect(UrlViewCount(key,window.getEnd,input.iterator.next()))
   }
 }
-
 // 自定义keyed process函数
 class TopNHotUrls(topSize: Int) extends KeyedProcessFunction[Long,UrlViewCount,String]{
 
