@@ -2,8 +2,10 @@ package org.hjj
 
 import java.sql.Timestamp
 import java.text.SimpleDateFormat
+import java.util.Properties
 
 import org.apache.flink.api.common.functions.AggregateFunction
+import org.apache.flink.api.common.serialization.SimpleStringSchema
 import org.apache.flink.api.common.state.{MapState, MapStateDescriptor}
 import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
@@ -13,18 +15,26 @@ import org.apache.flink.api.scala._
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction
 import org.apache.flink.streaming.api.scala.function.WindowFunction
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow
+import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer
 import org.apache.flink.util.Collector
 
 import scala.collection.mutable.ListBuffer
 
-// 数据日志样例类
+// 数据日志样例类,ip,用户id，事件事件，请求方法，url
 case class ApacheLogEvent(ip: String, userId: String, eventTime: Long, method: String, url: String)
-// 输出结果样例类
+// 输出结果样例类，url，windowEnd，计数
 case class UrlViewCount(url: String, windowEnd: Long, count: Long)
-
 
 object NetWorkFlow {
   def main(args: Array[String]): Unit = {
+
+    // 配置kafka属性参数
+    val properties = new Properties()
+    properties.setProperty("bootstrap.servers", "localhost:9092")
+    properties.setProperty("group.id", "consumer-group")
+    properties.setProperty("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer")
+    properties.setProperty("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer")
+    properties.setProperty("auto.offset.reset", "latest")
 
     // 创建flink环境
     val env = StreamExecutionEnvironment.getExecutionEnvironment
@@ -32,18 +42,21 @@ object NetWorkFlow {
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
 
     // v1: 从本地文件中读取
-    val dataStream = env.readTextFile("D:\\Code\\javaCode\\UserBehaviorBaseFlink\\NetWorkFlow\\src\\main\\resources\\apache.log")
+    // v2: 从kafka中读取
+    // val dataStream = env.readTextFile("D:\\Code\\javaCode\\UserBehaviorBaseFlink\\NetWorkFlow\\src\\main\\resources\\apache.log")
+    val dataStream = env.addSource(new FlinkKafkaConsumer[String]("apacheLog",new SimpleStringSchema(),properties))
       .map(data =>{
         val dataArray = data.split(" ")
         val simpleDateFormat = new SimpleDateFormat("dd/MM/yyyy:HH:mm:ss") // 定义时间格式
         val timestamp = simpleDateFormat.parse(dataArray(3).trim).getTime
         ApacheLogEvent(dataArray(0).trim,dataArray(1).trim,timestamp,dataArray(5).trim,dataArray(6).trim)
-      })
+      })  // 由于数据中的时间都是乱序的，所以需要使用watermark
       .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[ApacheLogEvent](Time.seconds(1)) {
         override def extractTimestamp(t: ApacheLogEvent): Long = t.eventTime
       })
+      .filter(_.method == "GET")  // 过滤出GET方法的数据
       .keyBy(_.url)
-      .timeWindow(Time.minutes(10),Time.seconds(5))
+      .timeWindow(Time.minutes(1),Time.seconds(5))
       .allowedLateness(Time.seconds(60))  // 允许迟到的时间为60秒
       .aggregate(new CountAgg(),new WindowResult())
 
@@ -77,12 +90,12 @@ class WindowResult() extends WindowFunction[Long,UrlViewCount,String,TimeWindow]
 }
 // 自定义keyed process函数
 class TopNHotUrls(topSize: Int) extends KeyedProcessFunction[Long,UrlViewCount,String]{
-
+  // 使用懒加载
   lazy val urlState: MapState[String,Long] = getRuntimeContext.getMapState(new MapStateDescriptor[String,Long]("url-state",classOf[String],classOf[Long]))
 
   override def processElement(value: UrlViewCount, ctx: KeyedProcessFunction[Long, UrlViewCount, String]#Context, out: Collector[String]): Unit = {
     urlState.put(value.url,value.count)
-    ctx.timerService().registerEventTimeTimer(value.windowEnd+1)
+    ctx.timerService().registerEventTimeTimer(value.windowEnd+10*1000)
   }
 
   override def onTimer(timestamp: Long, ctx: KeyedProcessFunction[Long, UrlViewCount, String]#OnTimerContext, out: Collector[String]): Unit = {
