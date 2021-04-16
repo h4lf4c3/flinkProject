@@ -1,7 +1,6 @@
 package org.hjj
 
 import java.util.Properties
-
 import org.apache.flink.api.scala._
 import org.apache.flink.api.common.serialization.SimpleStringSchema
 import org.apache.flink.streaming.api.TimeCharacteristic
