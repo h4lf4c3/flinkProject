@@ -1,33 +1,30 @@
 package org.hjj
 
-import java.sql.{Connection, DriverManager, PreparedStatement}
+import java.util
 import java.util.Properties
-import org.apache.flink.api.common.functions.AggregateFunction
-import org.apache.flink.api.common.serialization.SimpleStringSchema
+import org.apache.flink.api.scala._
+import org.apache.flink.api.common.functions.{AggregateFunction, RuntimeContext}
 import org.apache.flink.api.common.state.{ListState, ListStateDescriptor}
 import org.apache.flink.api.java.tuple.{Tuple, Tuple1}
-import org.apache.flink.streaming.api.TimeCharacteristic
-import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
-import org.apache.flink.api.scala._
 import org.apache.flink.configuration.Configuration
+import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction
+import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
 import org.apache.flink.streaming.api.scala.function.WindowFunction
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow
-import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer
+import org.apache.flink.streaming.connectors.elasticsearch.{ElasticsearchSinkFunction, RequestIndexer}
+import org.apache.flink.streaming.connectors.elasticsearch6.ElasticsearchSink
 import org.apache.flink.util.Collector
-
+import org.apache.http.HttpHost
+import org.elasticsearch.client.Requests
 import scala.collection.mutable.ListBuffer
 
-/**
- * 实时可视化版本，对浏览量排名前十的商品进行统计，并存入mariadb中
- * 再利用Tableau连接mariadb进行实时可视化
- */
 
-object HotItemsM {
+// es版本，目前无法实时可视化，程序执行完，kibana上才能检索到数据
+// 后期可能采用flinksql进行实时可视化
+object HotItems2Es {
   def main(args: Array[String]): Unit = {
-
     // 配置kafka属性参数
     val properties = new Properties()
     properties.setProperty("bootstrap.servers", "localhost:9092")
@@ -42,8 +39,8 @@ object HotItemsM {
     env.setParallelism(1) // 设置并行度
 
     // 读取文件
-    // val stream = env.readTextFile("D:\\Code\\javaCode\\UserBehaviorBaseFlink\\HotItems\\src\\main\\resources\\UserBehavior.csv")
-    val stream = env.addSource(new FlinkKafkaConsumer[String]("HotItems",new SimpleStringSchema(),properties))
+    val stream = env.readTextFile("D:\\Code\\javaCode\\UserBehaviorBaseFlink\\HotItems\\src\\main\\resources\\UserBehavior.csv")
+    // val stream = env.addSource(new FlinkKafkaConsumer[String]("HotItems",new SimpleStringSchema(),properties))
     val resultStream = stream.map(line => {
       val arrayLine = line.split(",") // 按照逗号进行分割,然后返回对象
       UserBehaviour(arrayLine(0).toLong, arrayLine(1).toLong, arrayLine(2).toInt, arrayLine(3), arrayLine(4).toLong)
@@ -55,13 +52,33 @@ object HotItemsM {
       .aggregate(new CountAgg(), new WindowResultFunction())
       .keyBy("windowEnd")
       .process(new TopNHotItems(10))
-//      .print()
+    //      .print()
+
+    val httpHosts = new util.ArrayList[HttpHost]()
+    httpHosts.add(new HttpHost("localhost",9200))
+
+    val elasticBuilder = new ElasticsearchSink.Builder[ItemViewCount2](httpHosts, new ElasticsearchSinkFunction[ItemViewCount2] {
+      override def process(t: ItemViewCount2, runtimeContext: RuntimeContext, requestIndexer: RequestIndexer): Unit = {
+        println("saving data" + t)
+        val jsonString = new util.HashMap[String, String]()
+        val jsonLong = new util.HashMap[String,Long]()
+        jsonString.put("itemId",t.itemId)
+        jsonString.put("windowEnd",t.windowEnd)
+        jsonLong.put("timestamp",t.count.toLong)
+
+        val indexRequest = Requests.indexRequest().index("hotitems").`type`("readingData").source(jsonString)
+        val indexRequest2 = Requests.indexRequest().index("hotitems").`type`("readingData").source(jsonLong)
+        requestIndexer.add(indexRequest)
+        requestIndexer.add(indexRequest2)
+        println("saved successfully")
+      }
+    })
 
     resultStream.map(data =>{
       val arrayData = data.split(",")
       ItemViewCount2(arrayData(0),arrayData(1),arrayData(2))
     })
-      .addSink(new JdbcSinkFunc())
+      .addSink(elasticBuilder.build())
 
     resultStream.print()
 
@@ -117,48 +134,16 @@ object HotItemsM {
       itemState.clear()
       // 按照点击量进行排序，从大到小，选取topN
       val sortedItems = allItems.sortBy(_.count)(Ordering.Long.reverse).take(topSize)
-      // 将排序后的数据美化输出
+      // 返回值
       val result: StringBuilder = new StringBuilder
       // 可以直接遍历index取到序号
       for (i <- sortedItems.indices){
         val currentItem: ItemViewCount = sortedItems(i)
-        // 输出格式为
         result.append(currentItem.itemId).append(",").append(currentItem.count).append(",").append(currentItem.windowEnd).append("\n")
       }
+
       Thread.sleep(1000)
       out.collect(result.toString())
     }
   }
-
-
-  class JdbcSinkFunc() extends RichSinkFunction[ItemViewCount2]{
-    // 定义连接以及预编译语句
-    var conn: Connection = _
-    var insertStmt: PreparedStatement = _
-    var updateStmt: PreparedStatement = _
-//    var deleteStmt: PreparedStatement = _
-
-    override def open(parameters: Configuration): Unit = {
-      conn = DriverManager.getConnection("jdbc:mysql://localhost:3306/MyData","root","123456")
-      insertStmt = conn.prepareStatement("INSERT INTO ItemAndPV(itemId,pvCount) VALUES(?,?)")
-      updateStmt = conn.prepareStatement("UPDATE ItemAndPV SET pvCount=? WHERE itemId=?")
-    }
-
-    override def invoke(value: ItemViewCount2): Unit = {
-      updateStmt.setString(2,value.itemId)
-      updateStmt.setInt(1,value.count.toInt)
-      updateStmt.execute()
-      if (updateStmt.getUpdateCount ==0){
-        insertStmt.setString(1,value.itemId)
-        insertStmt.setInt(2,value.count.toInt)
-        insertStmt.execute()
-      }
-    }
-
-    override def close(): Unit = {
-      insertStmt.close()
-      conn.close()
-    }
-  }
 }
-
