@@ -1,5 +1,8 @@
 package com.hjj
 
+import java.util.Properties
+
+import org.apache.flink.api.common.serialization.SimpleStringSchema
 import org.apache.flink.api.common.state.ListStateDescriptor
 import org.apache.flink.api.scala._
 import org.apache.flink.streaming.api.TimeCharacteristic
@@ -7,6 +10,7 @@ import org.apache.flink.streaming.api.functions.KeyedProcessFunction
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
 import org.apache.flink.streaming.api.windowing.time.Time
+import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer
 import org.apache.flink.util.Collector
 
 // 定义登录事件样例类，用户id，ip，事件类型，事件时间
@@ -15,14 +19,21 @@ case class LoginEvent(userId: Long, ip: String, eventType: String, eventTime: Lo
 case class Warning(userId: Long, firstFailTime: Long, lastFailTime: Long, waringMsg: String)
 object LoginEvent {
   def main(args: Array[String]): Unit = {
+    // 配置kafka属性参数
+    val properties = new Properties()
+    properties.setProperty("bootstrap.servers", "localhost:9092")
+    properties.setProperty("group.id", "consumer-group")
+    properties.setProperty("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer")
+    properties.setProperty("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer")
+    properties.setProperty("auto.offset.reset", "latest")
     // 定义flink环境
     val env = StreamExecutionEnvironment.getExecutionEnvironment
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     env.setParallelism(1)
 
     // 数据源
-    val resource = env.readTextFile("D:\\Code\\javaCode\\UserBehaviorBaseFlink\\LoginFailDetect\\src\\main\\resources\\LoginEvent.log")
-
+//    val resource = env.readTextFile("D:\\Code\\javaCode\\UserBehaviorBaseFlink\\LoginFailDetect\\src\\main\\resources\\LoginEvent.log")
+    val resource = env.addSource(new FlinkKafkaConsumer[String]("loginEvent", new SimpleStringSchema(), properties))
     val loginEventStream = resource.map( data => {
       val dataArray = data.split(",")
       LoginEvent( dataArray(0).toLong, dataArray(1), dataArray(2), dataArray(3).toLong )
