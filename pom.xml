@@ -13,6 +13,7 @@
         <module>NetWorkFlow</module>
         <module>LoginFailDetect</module>
         <module>MarketAnalysis</module>
+        <module>OrderTimeoutDetect</module>
     </modules>
 
     <name>UserBehaviorBaseFlink</name>
