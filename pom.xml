@@ -12,6 +12,7 @@
         <module>HotItems</module>
         <module>NetWorkFlow</module>
         <module>LoginFailDetect</module>
+        <module>MarketAnalysis</module>
     </modules>
 
     <name>UserBehaviorBaseFlink</name>
