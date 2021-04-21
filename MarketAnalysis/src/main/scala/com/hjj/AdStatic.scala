@@ -1,7 +1,6 @@
 package com.hjj
 
 import java.sql.Timestamp
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import org.apache.flink.api.common.functions.AggregateFunction
