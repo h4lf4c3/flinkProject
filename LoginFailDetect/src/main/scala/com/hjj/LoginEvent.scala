@@ -1,7 +1,7 @@
 package com.hjj
 
-import java.util.Properties
-
+import java.text.SimpleDateFormat
+import java.util.{Date, Properties}
 import org.apache.flink.api.common.serialization.SimpleStringSchema
 import org.apache.flink.api.common.state.ListStateDescriptor
 import org.apache.flink.api.scala._
@@ -16,7 +16,7 @@ import org.apache.flink.util.Collector
 // 定义登录事件样例类，用户id，ip，事件类型，事件时间
 case class LoginEvent(userId: Long, ip: String, eventType: String, eventTime: Long)
 // 定义输出结果样例类，用户id，第一次失败时间，最终失败时间，警告信息
-case class Warning(userId: Long, firstFailTime: Long, lastFailTime: Long, waringMsg: String)
+case class Warning(userId: Long, firstFailTime: String, lastFailTime: String, waringMsg: String)
 object LoginEvent {
   def main(args: Array[String]): Unit = {
     // 配置kafka属性参数
@@ -52,14 +52,15 @@ object LoginEvent {
   class LoginWaring(maxFailTimes: Int) extends KeyedProcessFunction[Long,LoginEvent,Warning]{
     // 定义状态，保存2秒内的所有登录失败event
     lazy val loginFailState = getRuntimeContext.getListState(new ListStateDescriptor[LoginEvent]("login-fail-state",classOf[LoginEvent]))
+    val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
     override def processElement(value: LoginEvent, ctx: KeyedProcessFunction[Long, LoginEvent, Warning]#Context, out: Collector[Warning]): Unit = {
       if (value.eventType == "fail") {
         val iter = loginFailState.get().iterator()
         if (iter.hasNext){
           // 如果已经有登录失败事件，那么就比较两次失败事件的时间
           val firstFail = iter.next()
-          if(value.eventTime < firstFail.eventTime+2){
-            out.collect(Warning(value.userId,firstFail.eventTime,value.eventTime,"login fail in 2 seconds"))
+          if(value.eventTime< firstFail.eventTime+2L){
+            out.collect(Warning(value.userId,sdf.format(new Date(firstFail.eventTime*1000L)),sdf.format(new Date(value.eventTime*1000L)),"login fail in 2 seconds"))
           }
           loginFailState.clear()
           loginFailState.add(value)

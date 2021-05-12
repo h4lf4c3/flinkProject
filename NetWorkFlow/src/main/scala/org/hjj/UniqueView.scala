@@ -1,6 +1,7 @@
 package org.hjj
 
-import java.util.Properties
+import java.text.SimpleDateFormat
+import java.util.{Date, Properties}
 
 import org.apache.flink.api.scala._
 import org.apache.flink.api.common.serialization.SimpleStringSchema
@@ -16,7 +17,7 @@ import org.apache.flink.util.Collector
  * 由于点击可能存在重复项，这里采用set进行去重
  */
 
-case class UniqueCount(windwoEnd: Long,uncount: Long)
+case class UniqueCount(windwoEnd: String,uncount: Long)
 
 object UniqueView {
   def main(args: Array[String]): Unit = {
@@ -50,9 +51,12 @@ object UniqueView {
 class UniquByWindow() extends AllWindowFunction[UserBehavior,UniqueCount,TimeWindow]{
   override def apply(window: TimeWindow, input: Iterable[UserBehavior], out: Collector[UniqueCount]): Unit = {
     var idSet = Set[Long]()
+    val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+
     for(user <- input){
       idSet += user.userId
     }
-    out.collect(UniqueCount(window.getEnd,idSet.size))
+
+    out.collect(UniqueCount(sdf.format(new Date(window.getEnd)),idSet.size))
   }
 }

@@ -109,7 +109,7 @@ class AdCountResult() extends WindowFunction[Long,CountByProvince,String,TimeWin
 
 
 /*
-生成随机数据，后续可能会改成kafka
+生成随机数据，
  */
 class SimulatedAdSource() extends RichSourceFunction[AdClickEvent]{
   var running = true

@@ -20,6 +20,7 @@ object KafkaProducerLogin {
       println(line)
       val record = new ProducerRecord[String, String](topic, line)
       producer.send(record)
+      Thread.sleep(10)
     }
     producer.close()
   }

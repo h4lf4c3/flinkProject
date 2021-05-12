@@ -1,6 +1,8 @@
 package org.hjj
 
-import java.util.Properties
+import java.text.SimpleDateFormat
+import java.util.{Date, Properties}
+
 import org.apache.flink.api.scala._
 import org.apache.flink.api.common.serialization.SimpleStringSchema
 import org.apache.flink.streaming.api.TimeCharacteristic
@@ -37,7 +39,7 @@ object BloomFilter {
       .filter(_.behavior == "pv")
       .map(data => ("dummykey",data.userId))
       .keyBy(_._1)
-      .timeWindow(Time.hours(1))
+      .timeWindow(Time.seconds(60 * 60))
       .trigger(new MyTrigger())
       .process(new UniqueWithBloom())
 
@@ -68,11 +70,12 @@ class UniqueWithBloom() extends ProcessWindowFunction[(String,Long),UniqueCount,
   override def process(key: String, context: Context, elements: Iterable[(String, Long)], out: Collector[UniqueCount]): Unit = {
     val storeKey = context.window.getEnd.toString
     var count = 0L
+    val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
     if(jedis.hget("count",storeKey)!=null){
       count = jedis.hget("count",storeKey).toLong
     }
-    val userI = elements.last._2.toString
-    val offset = bloom.hash(userI, 61)
+    val userId = elements.last._2.toString
+    val offset = bloom.hash(userId, 61)
     val isExist = jedis.getbit(storeKey, offset)
 
     if(!isExist){
@@ -80,7 +83,7 @@ class UniqueWithBloom() extends ProcessWindowFunction[(String,Long),UniqueCount,
       jedis.hset("count",storeKey,(count+1).toString)
     }
     else{
-      out.collect(UniqueCount(storeKey.toLong,count))
+      out.collect(UniqueCount(sdf.format(new Date(storeKey.toLong)),count))
     }
   }
 }
